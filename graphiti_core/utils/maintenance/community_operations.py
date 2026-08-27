@@ -90,52 +90,76 @@ async def get_community_clusters(
     return community_clusters
 
 
-def label_propagation(projection: dict[str, list[Neighbor]]) -> list[list[str]]:
-    # Implement the label propagation community detection algorithm.
-    # 1. Start with each node being assigned its own community
-    # 2. Each node will take on the community of the plurality of its neighbors
-    # 3. Ties are broken by going to the largest community
-    # 4. Continue until no communities change during propagation
+def label_propagation(
+    projection: dict[str, list[Neighbor]], max_iterations: int = 100
+) -> list[list[str]]:
+    """Cluster nodes with deterministic asynchronous label propagation.
 
-    community_map = {uuid: i for i, uuid in enumerate(projection.keys())}
+    Every node starts with its UUID as a stable label. UUIDs are sorted before
+    every sweep so the result is independent of database and mapping iteration
+    order. Updates are applied in place, allowing later nodes in a sweep to
+    observe earlier changes and avoiding the period-two oscillation of
+    synchronous LPA.
 
-    while True:
+    The current label wins a maximum-weight tie. Otherwise the smallest stable
+    label wins. A repeated state or the iteration cap raises instead of
+    returning a clustering that has not converged.
+    """
+    if max_iterations < 1:
+        raise ValueError('max_iterations must be at least 1')
+
+    node_uuids = sorted(projection)
+    community_map = {uuid: uuid for uuid in node_uuids}
+    seen_states = {tuple(community_map[uuid] for uuid in node_uuids)}
+
+    for _ in range(max_iterations):
         no_change = True
-        new_community_map: dict[str, int] = {}
 
-        for uuid, neighbors in projection.items():
+        for uuid in node_uuids:
             curr_community = community_map[uuid]
 
-            community_candidates: dict[int, int] = defaultdict(int)
-            for neighbor in neighbors:
+            community_candidates: dict[str, int] = defaultdict(int)
+            for neighbor in projection[uuid]:
                 community_candidates[community_map[neighbor.node_uuid]] += neighbor.edge_count
-            community_lst = [
-                (count, community) for community, count in community_candidates.items()
-            ]
 
-            community_lst.sort(reverse=True)
-            candidate_rank, community_candidate = community_lst[0] if community_lst else (0, -1)
-            if community_candidate != -1 and candidate_rank > 1:
-                new_community = community_candidate
+            if not community_candidates:
+                continue
+
+            max_weight = max(community_candidates.values())
+            if (
+                curr_community in community_candidates
+                and community_candidates[curr_community] == max_weight
+            ):
+                new_community = curr_community
             else:
-                new_community = max(community_candidate, curr_community)
-
-            new_community_map[uuid] = new_community
+                new_community = min(
+                    community
+                    for community, weight in community_candidates.items()
+                    if weight == max_weight
+                )
 
             if new_community != curr_community:
+                community_map[uuid] = new_community
                 no_change = False
 
         if no_change:
             break
 
-        community_map = new_community_map
+        state = tuple(community_map[uuid] for uuid in node_uuids)
+        if state in seen_states:
+            raise RuntimeError('label_propagation detected a repeated state before convergence')
+        seen_states.add(state)
+    else:
+        raise RuntimeError(
+            f'label_propagation failed to converge within {max_iterations} iterations'
+        )
 
-    community_cluster_map = defaultdict(list)
-    for uuid, community in community_map.items():
+    community_cluster_map: dict[str, list[str]] = defaultdict(list)
+    for uuid in node_uuids:
+        community = community_map[uuid]
         community_cluster_map[community].append(uuid)
 
-    clusters = [cluster for cluster in community_cluster_map.values()]
-    return clusters
+    return sorted(community_cluster_map.values(), key=lambda cluster: cluster[0])
 
 
 async def summarize_pair(llm_client: LLMClient, summary_pair: tuple[str, str]) -> str:
