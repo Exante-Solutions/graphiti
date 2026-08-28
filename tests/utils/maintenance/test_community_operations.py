@@ -20,6 +20,9 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel
 
+from graphiti_core.driver.neo4j.operations.graph_ops import (
+    Neo4jGraphMaintenanceOperations,
+)
 from graphiti_core.driver.operations.graph_utils import (
     Neighbor as DriverNeighbor,
 )
@@ -200,6 +203,37 @@ async def test_community_cluster_entities_are_sorted_by_uuid(monkeypatch) -> Non
     )
 
     clusters = await get_community_clusters(cast(Any, Driver()), ['group'])
+
+    assert [[node.uuid for node in cluster] for cluster in clusters] == [
+        ['node-a', 'node-b']
+    ]
+
+
+@pytest.mark.asyncio
+async def test_neo4j_community_cluster_entities_follow_cluster_uuid_order(monkeypatch) -> None:
+    class Executor:
+        async def execute_query(self, query, **kwargs):
+            if 'WHERE n.group_id IN $group_ids' in query:
+                return ([{'uuid': 'node-b'}, {'uuid': 'node-a'}], None, None)
+            if 'RELATES_TO' in query:
+                neighbor = 'node-b' if kwargs['uuid'] == 'node-a' else 'node-a'
+                return ([{'uuid': neighbor, 'count': 1}], None, None)
+            if 'WHERE n.uuid IN $uuids' in query:
+                return ([{'uuid': 'node-b'}, {'uuid': 'node-a'}], None, None)
+            raise AssertionError(query)
+
+    monkeypatch.setattr(
+        'graphiti_core.driver.neo4j.operations.graph_ops.entity_node_from_record',
+        lambda record: type('Node', (), {'uuid': record['uuid']})(),
+    )
+    monkeypatch.setattr(
+        'graphiti_core.driver.neo4j.operations.graph_ops.label_propagation',
+        lambda _projection: [['node-a', 'node-b']],
+    )
+
+    clusters = await Neo4jGraphMaintenanceOperations().get_community_clusters(
+        cast(Any, Executor()), ['group']
+    )
 
     assert [[node.uuid for node in cluster] for cluster in clusters] == [
         ['node-a', 'node-b']

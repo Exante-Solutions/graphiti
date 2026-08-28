@@ -84,9 +84,15 @@ async def get_community_clusters(
                 *[EntityNode.get_by_uuids(driver, cluster) for cluster in cluster_uuids]
             )
         )
-        community_clusters.extend(
-            sorted(cluster, key=lambda entity: entity.uuid) for cluster in fetched_clusters
-        )
+        for expected_uuids, fetched_cluster in zip(
+            cluster_uuids, fetched_clusters, strict=True
+        ):
+            entities_by_uuid = {entity.uuid: entity for entity in fetched_cluster}
+            if len(entities_by_uuid) != len(fetched_cluster) or set(entities_by_uuid) != set(
+                expected_uuids
+            ):
+                raise RuntimeError('community cluster entity hydration did not match its UUIDs')
+            community_clusters.append([entities_by_uuid[uuid] for uuid in expected_uuids])
 
     return community_clusters
 

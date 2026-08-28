@@ -141,7 +141,15 @@ class Neo4jGraphMaintenanceOperations(GraphMaintenanceOperations):
                     uuids=cluster,
                     routing_='r',
                 )
-                community_clusters.append([entity_node_from_record(r) for r in cluster_records])
+                fetched_cluster = [entity_node_from_record(r) for r in cluster_records]
+                entities_by_uuid = {entity.uuid: entity for entity in fetched_cluster}
+                if len(entities_by_uuid) != len(fetched_cluster) or set(entities_by_uuid) != set(
+                    cluster
+                ):
+                    raise RuntimeError(
+                        'community cluster entity hydration did not match its UUIDs'
+                    )
+                community_clusters.append([entities_by_uuid[uuid] for uuid in cluster])
 
         return community_clusters
 
