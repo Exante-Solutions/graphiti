@@ -79,12 +79,13 @@ async def get_community_clusters(
 
         cluster_uuids = label_propagation(projection)
 
-        community_clusters.extend(
-            list(
-                await semaphore_gather(
-                    *[EntityNode.get_by_uuids(driver, cluster) for cluster in cluster_uuids]
-                )
+        fetched_clusters = list(
+            await semaphore_gather(
+                *[EntityNode.get_by_uuids(driver, cluster) for cluster in cluster_uuids]
             )
+        )
+        community_clusters.extend(
+            sorted(cluster, key=lambda entity: entity.uuid) for cluster in fetched_clusters
         )
 
     return community_clusters

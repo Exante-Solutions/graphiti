@@ -15,6 +15,7 @@ limitations under the License.
 """
 
 from collections.abc import Callable
+from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
@@ -27,6 +28,9 @@ from graphiti_core.driver.operations.graph_utils import (
 )
 from graphiti_core.utils.maintenance.community_operations import (
     Neighbor as MaintenanceNeighbor,
+)
+from graphiti_core.utils.maintenance.community_operations import (
+    get_community_clusters,
 )
 from graphiti_core.utils.maintenance.community_operations import (
     label_propagation as maintenance_label_propagation,
@@ -160,3 +164,43 @@ def test_repeated_state_cycle_raises_instead_of_returning_partial_clusters(
 
     with pytest.raises(RuntimeError, match='detected a repeated state'):
         impl(projection)
+
+
+@pytest.mark.asyncio
+async def test_community_cluster_entities_are_sorted_by_uuid(monkeypatch) -> None:
+    class Driver:
+        graph_operations_interface = None
+        provider = None
+
+        async def execute_query(self, *_args, **_kwargs):
+            return ([{'uuid': 'node-b', 'count': 1}], None, None)
+
+    nodes = [
+        type('Node', (), {'uuid': 'node-a'})(),
+        type('Node', (), {'uuid': 'node-b'})(),
+    ]
+
+    async def get_by_group_ids(_cls, _driver, _group_ids):
+        return nodes
+
+    async def get_by_uuids(_cls, _driver, _uuids):
+        return list(reversed(nodes))
+
+    monkeypatch.setattr(
+        'graphiti_core.utils.maintenance.community_operations.EntityNode.get_by_group_ids',
+        classmethod(get_by_group_ids),
+    )
+    monkeypatch.setattr(
+        'graphiti_core.utils.maintenance.community_operations.EntityNode.get_by_uuids',
+        classmethod(get_by_uuids),
+    )
+    monkeypatch.setattr(
+        'graphiti_core.utils.maintenance.community_operations.label_propagation',
+        lambda _projection: [['node-a', 'node-b']],
+    )
+
+    clusters = await get_community_clusters(cast(Any, Driver()), ['group'])
+
+    assert [[node.uuid for node in cluster] for cluster in clusters] == [
+        ['node-a', 'node-b']
+    ]
